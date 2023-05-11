@@ -1,0 +1,72 @@
+
+
+
+make a portfolio of stocks
+
+within 1 etf?
+	how similar are they if so
+just a few?
+etf?
+
+
+train on only past 1 year of data? or how long? How long before not representative?
+can train consecutively, or must be simultaneously? i.e. can input 1 stock after the other, or must be all at once?
+
+should each iteration train on the same data? or should there be stocks that swap in / out ? 
+	could keep same
+	could randomly choose a subset of portfolio
+	could randomly swap out X stocks 
+	
+
+
+model needs to somehow have memory of previous stuff
+either that or input needs to be past X time of ---
+
+reduced: 
+outputs buy, sell if have, short, buy if have short
+
+
+INPUTS:
+
+
+cur bids + offers
+for each:
+127 + 1 remaining weighted avg
+127 of the bids closest to cur price,
+1 of weighted avg of all remaining offers/bids
+
+successful transactions
+
+cur holdings
+
+volatility?
+
+volume?
+
++ relevant metadata
+
+OUTPUTS:
+buy sell do nothing
+amt
+
+
+Evaluate upon:
+profit
+consistency
+	can choose to penalise negative results more heavily -> incentivise more reliability
+	want: penalise big discrepancy + wrong side heavy, but right sign less
+		cur idea: weight the square errors
+	
+	
+	
+	
+do weekends have an impact?
+do long weekensd make less good?
+
+
+
+
+
+I DONT THINK MY DATA INPUT MAKES ANY SENSE. 
+NEED TO GIVE {yest_close->today_open, yest_open->today_close, yest_vol}
+is that what i have?
