@@ -1,5 +1,12 @@
 0.1.1
-improve loss function
+loss function ln(x^2 + 1) => larger prediction width + better sign accuracy
+
+0.1.2
+cleaned up and modularised. graphical results written to files
+
+===============================================================================
+===============================================================================
+
 learn about optimizers, and then non differentiable loss f'ns
 for now - sign wrong weight 1.5, correct 0.5 
 maybe decrease the #inc/#cor factor lower bound, down 0.1 or so maybe
