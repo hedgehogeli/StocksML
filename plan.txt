@@ -1,11 +1,16 @@
 0.1.1
 improve loss function
+learn about optimizers, and then non differentiable loss f'ns
+for now - sign wrong weight 1.5, correct 0.5 
+maybe decrease the #inc/#cor factor lower bound, down 0.1 or so maybe
 
 0.1.2
 model output
+check if train and test losses are actually correct - how are test losses lower?
 
 0.1.3
 proper testing methodologies
+test last 1/3/6 months for {ROI, % sign correct, ...}
 
 0.1.4
 lr_scheduler, hidden_size, lstm layers
@@ -18,5 +23,6 @@ multivariate input
 
 ...
 
-post backtesting, implemention of loss threshold
+post backtesting, implemention of loss threshold, fee per trade, fill found checking
+
 1.0.0

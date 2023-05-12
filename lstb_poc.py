@@ -18,9 +18,12 @@ device = 'cpu'
 lookback = 5 # num of days LSTM looks backwards
 train_test = 0.9 # proportion of train/test. currently 5 years, 4.5 train 0.5 test
 
-# data = pd.read_csv('ENB.csv')
+CSVs = ['ENB.csv', 'SU.csv', 'MFC.csv', 'XEG.csv', 'XFN.csv', 'XIU.csv', 'GSPTSE.csv']
+
+dir = 'stock_data/'
+data = pd.read_csv(dir+'ENB.csv')
 # data = pd.read_csv('SU.csv')
-data = pd.read_csv('MFC.csv')
+# data = pd.read_csv('MFC.csv')
 
 data.drop(columns=['High', 'Low', 'Adj Close'], axis=1, inplace=True)
 data['Date'] = pd.to_datetime(data['Date'])
@@ -190,7 +193,7 @@ class myLoss(nn.Module):
         super().__init__()
 
     def forward(self, yHat, y):
-        errorSq = torch.sum(torch.square(yHat-y))
+        errorSq = torch.sum(torch.log(torch.square(yHat-y)+1))
         ### use log????
         ### ln(SQUARE + 1)
         n = y.size(dim=0)
@@ -321,7 +324,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
 
 # LEARNING RATE SCHEDULER
-scheduler = lr_scheduler.StepLR(optimizer, step_size=40, gamma=0.42)
+scheduler = lr_scheduler.StepLR(optimizer, step_size=40, gamma=0.40)
 
 
 
