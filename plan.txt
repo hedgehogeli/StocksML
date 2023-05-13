@@ -4,6 +4,9 @@ loss function ln(x^2 + 1) => larger prediction width + better sign accuracy
 0.1.2
 cleaned up and modularised. graphical results written to files
 
+0.1.3
+fixed model input, present day volume no longer given as input
+
 ===============================================================================
 ===============================================================================
 
@@ -14,12 +17,15 @@ maybe decrease the #inc/#cor factor lower bound, down 0.1 or so maybe
 0.1.2
 model output
 check if train and test losses are actually correct - how are test losses lower?
+check for test data leak into training
+i *think* i'm correct?
 
 0.1.3
 proper testing methodologies
 test last 1/3/6 months for {ROI, % sign correct, ...}
 
 0.1.4
+rough hyperparameter tuning
 lr_scheduler, hidden_size, lstm layers
 
 0.1.5

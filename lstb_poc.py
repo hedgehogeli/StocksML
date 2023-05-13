@@ -52,7 +52,7 @@ class myLoss(nn.Module):
         numSignCor = countSignMatch(yHat, y)
         numSignInc = N - numSignCor
         m = nn.Sigmoid()
-        factor = m((numSignInc / numSignCor)-1)
+        factor = m((numSignInc / numSignCor)-1.3)
 
         res = errorSq * factor / N 
 
@@ -76,17 +76,18 @@ scheduler = lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.60)
 ################################################################################
 
 
-def run_stock(data, lookback_days = 5, train_test_split = 0.9):
+def run_stock(data, lookback_days, train_test_split = 0.9):
     data.drop(columns=['High', 'Low', 'Adj Close'], axis=1, inplace=True)
     data['Date'] = pd.to_datetime(data['Date'])
 
     prepped_data = normalize_dataframe(data, lookback_days)
-    X_train, y_train, X_test, y_test = for_pytorch_dataframe(prepped_data.to_numpy(), lookback_days, train_test_split)
+    calc_naive(prepped_data)
+    X_train, y_train, X_test, y_test = for_pytorch_dataframe(prepped_data, lookback_days, train_test_split)
 
     train_dataset = TimeSeriesDataset(X_train, y_train)
     test_dataset = TimeSeriesDataset(X_test, y_test)
     
-    batch_size = 15 # why 16? what does this mean?
+    batch_size = 32 # TODO
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) # why shuffle every epoch?
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
@@ -110,7 +111,7 @@ def run_stock(data, lookback_days = 5, train_test_split = 0.9):
         df_row_list.append({'epoch':epoch, 'avgTrainLoss':train_loss, 'testLoss':test_loss, 
                         'testSignCorrect':sign_correct, 'ROI':roi})
         
-        if not epoch % 20:
+        if not epoch % 30:
             seconds_elapsed = (time.time() - start_time)
             seconds_per_epoch = seconds_elapsed / (epoch+1)
             est_time_remaining = (num_epochs-(epoch+1))*seconds_per_epoch
@@ -146,11 +147,18 @@ def calc_naive(df):
     return
 
 def normalize_dataframe(df, days_back):
-    # calc yest_close->today_open and today_open->today_close % deltas
+    # calc (yest_close->today_open) and (today_open->today_close) %deltas
     df['open_d_close'] = (df['Close'] - df['Open']) / df['Open']  # (close-open)/open
     df['close_d_open'] = (df['Open'] - df['Close'].shift(1)) / df['Close'].shift(1) 
 
     # "normalize":
+
+    # volume -> log normal
+    df['ln_vol'] = np.log(df['Volume'])
+    ln_vol_mean = np.array(df['ln_vol']).mean()
+    ln_vol_stdev = np.array(df['ln_vol']).std()
+    df['ln_vol_Z'] = (df['ln_vol']-ln_vol_mean)/ln_vol_stdev
+
     # %delta -> Z-score 
     open_d_close_mean = df['open_d_close'].mean() 
     open_d_close_stdev = df['open_d_close'].std()
@@ -160,30 +168,33 @@ def normalize_dataframe(df, days_back):
     close_d_open_stdev = df['close_d_open'].std()
     df['close_open_Z'] = (df['close_d_open']-close_d_open_mean)/close_d_open_stdev
 
-    # volume -> log normal
-    df['ln_vol'] = np.log(df['Volume'])
-    ln_vol_mean = df['ln_vol'].mean()
-    ln_vol_stdev = df['ln_vol'].std()
-    df['ln_vol_Z'] = (df['ln_vol']-ln_vol_mean)/ln_vol_stdev
-    
     # copy in prev lookback days
     for i in range(1, days_back+1):
         df[f'ln_vol_Z_-{i}'] = df['ln_vol_Z'].shift(i)
-        df[f'close_open_Z_-{i}'] = df['close_open_Z'].shift(i)
         df[f'open_close_Z_-{i}'] = df['open_close_Z'].shift(i)
-
-    calc_naive(df)
-
-    df = dc(df)
-    df.drop(columns=['Date', 'Volume', 'ln_vol', 'Open', 'Close', 'close_d_open', 'open_d_close'], 
-            axis=1, inplace=True)
-    df.dropna(inplace=True)
+        df[f'close_open_Z_-{i}'] = df['close_open_Z'].shift(i)
     
     return df
 
+
 def for_pytorch_dataframe(df, lookback_days, train_test_split):
+    df = dc(df)
+    df.drop(columns=['Date', 'Volume', 'ln_vol', 'ln_vol_Z', 'Open', 'Close', 
+                     'close_d_open', 'open_d_close', f'close_open_Z_-{lookback_days}'], 
+            axis=1, inplace=True)
+    df.dropna(inplace=True)
+
+    # df.to_csv('out.csv')
+
+    df = df.to_numpy()
+
+    # volume of present day not given. 
+    # target prediction y = open_close_Z col. 
+    # given historical data in lookback_days * {close_open_Z, ln_vol_Z, open_close_Z}
     y = df[:, 0] # 1st col 
-    X = df[:, 1:] # all cols excluding 1st (open_close_Z is our excluded b/c predicting it)
+    X = df[:, 1:] # all cols after 1st 
+    # print('y', y)
+    # print('X', X)
     X = dc(np.flip(X, axis=1)) # reverses order of column, so most recent data is last, -5 -> -1 days
 
     split_index = int(len(X) * train_test_split)
@@ -194,8 +205,8 @@ def for_pytorch_dataframe(df, lookback_days, train_test_split):
 
     # pytorch conversion
     # lstm requires extra dimension
-    X_train = X_train.reshape((-1, lookback_days*3+2, 1))
-    X_test = X_test.reshape((-1, lookback_days*3+2, 1))
+    X_train = X_train.reshape((-1, lookback_days*3, 1))
+    X_test = X_test.reshape((-1, lookback_days*3, 1))
     y_train = y_train.reshape((-1, 1))
     y_test = y_test.reshape((-1, 1))
     # pytorch tensors
@@ -207,8 +218,6 @@ def for_pytorch_dataframe(df, lookback_days, train_test_split):
     return X_train, y_train, X_test, y_test
         
 def validate_output(yHat, y, df):
-    # print(yHat.size)
-    # print(y.size)
     assert yHat.size() == y.size()
     with torch.no_grad():
 
@@ -261,6 +270,7 @@ def train_one_epoch(train_loader):
         output = model(x_batch)
         loss = loss_function(output, y_batch)
         loss_accumulator += loss.item()
+        # print('training loss batch', batch_index, '{0:.5f}'.format(loss.item()))
         
         optimizer.zero_grad()
         loss.backward()
@@ -272,6 +282,7 @@ def train_one_epoch(train_loader):
         #                                             avg_loss_across_batches))
             # running_loss = 0.0
     
+    # print()
     return loss_accumulator / len(train_loader)
 
 # return (avg loss, output tensor, target tensor) for entire test period
@@ -286,7 +297,7 @@ def validate_one_epoch(test_loader, full_test_loader):
             output = model(x_batch)
             loss = loss_function(output, y_batch)
             running_loss += loss.item()
-
+            # print('test loss batch', batch_index, '{0:.5f}'.format(loss.item()))
 
     ret_full_output = None
     ret_target = None
