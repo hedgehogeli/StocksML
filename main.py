@@ -2,6 +2,9 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+from torch.utils.data import DataLoader
+
+
 from copy import deepcopy as dc
 
 import lstb_poc as lstb
@@ -14,15 +17,15 @@ CSVs = ['ENB', 'MFC', 'SU', 'XEG', 'XFN', 'XIU', 'GSPTSE']
 dir = 'stock_data/'
 write_dir = 'plot_outputs/'
 
-lookback = 6
-
+    
 
 
 def graph_training_data_cmp():
     with torch.no_grad():
-        predicted = model(X_train.to(device)).to('cpu').numpy()
-    plt.plot(y_train, label='Actual')
-    plt.plot(predicted, label='Predicted')
+        X, y = next(iter(full_train_loader))
+        ret_full_output = model(X)
+    plt.plot(y, label='Actual')
+    plt.plot(ret_full_output, label='Predicted')
     plt.xlabel('Day')
     plt.legend()
     plt.savefig(write_dir + csv + '_training_cmp.png')
@@ -30,22 +33,12 @@ def graph_training_data_cmp():
     return
 
 def graph_test_data_cmp():
-    test_predictions = model(X_test.to(device)).detach().cpu().numpy().flatten()
-
-    dummies = np.zeros((X_test.shape[0], lookback+1))
-    dummies[:, 0] = test_predictions
-
-    test_predictions = dc(dummies[:, 0])
-
-    dummies = np.zeros((X_test.shape[0], lookback+1))
-    dummies[:, 0] = y_test.flatten()
-
-    new_y_test = dc(dummies[:, 0])
-
-    plt.plot(new_y_test, label='Actual')
-    plt.plot(test_predictions, label='Predicted')
+    with torch.no_grad():
+        X, y = next(iter(full_test_loader))
+        ret_full_output = model(X)
+    plt.plot(y, label='Actual')
+    plt.plot(ret_full_output, label='Predicted')
     plt.axhline(y=0.0, color='r', linestyle='-')
-
     plt.xlabel('Day')
     plt.legend()
     plt.savefig(write_dir + csv + '_test_cmp.png')
@@ -77,14 +70,26 @@ def analyse_results():
     # am i lagging behind spikes? how to check numerically?
 
     return
+
+def read(filepath):
+    data = pd.read_csv(filepath, 
+                    usecols=['Date', 'Open', 'Close', 'Volume'])
+    data['Date'] = pd.to_datetime(data['Date'])
+    data.set_index('Date', inplace=True)
+    return data
     
 csv = CSVs[selection]
 # for csv in CSVs:
 print('*********** STARTING TRAINING ON STOCK', csv, '***********')
-data = pd.read_csv(dir + csv + '.csv')
-X_train, y_train, X_test, y_test, df_results = lstb.run_stock(data, lookback_days=lookback) 
+
+data = read(dir + csv + '.csv')
+prepped_data, full_train_loader, full_test_loader, df_results = lstb.run_stock(data) 
 # df_results: epoch avgTrainLoss testLoss testSignCorrect ROI
 df_results.to_csv(write_dir + csv + '_results.csv')
+
+split_index = int( len(prepped_data) * lstb.train_test_split )
+df_train = prepped_data[:split_index]
+df_test = prepped_data[split_index:]
 
 model = lstb.model
 graph_stuff()

@@ -7,8 +7,17 @@ cleaned up and modularised. graphical results written to files
 0.1.3
 fixed model input, present day volume no longer given as input
 
+0.2.0
+multivariate input, but doesn't seem to work very well? overfit train very fast
+cleaned up input and dataframe processing + some modularisation
+
 ===============================================================================
 ===============================================================================
+
+NEXT: MULTIVARIATE INPUT.
+THEN GET API WORKING. I WANT MORE DATA!
+
+
 
 learn about optimizers, and then non differentiable loss f'ns
 for now - sign wrong weight 1.5, correct 0.5 

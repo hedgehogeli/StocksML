@@ -12,30 +12,52 @@ import torch.optim.lr_scheduler as lr_scheduler
 from copy import deepcopy as dc
 import time
 
+import process_data
 
+
+################################################################################
+train_test_split = 0.9
+################################################################################
+batch_size = 16 
+lookback = 7
+target = 'Open_Close_Z'
+delay_features = ['ln_Volume_Z']
+features = ['Close_Open_Z']
+################################################################################
+hiddenSize = 128 
+lstmLayers = 1
+################################################################################
+learning_rate = 0.0002
+num_epochs = 200
+################################################################################
 
 device = 'cpu'
 
-# TODO: my input_size = # of features should probably be 3 ???
 class LSTM(nn.Module):
-    def __init__(self, input_size, hidden_size, num_stacked_layers):
+    def __init__(self, num_features, hidden_layer_size, num_layers):
         super().__init__()
-        self.hidden_size = hidden_size
-        self.num_stacked_layers = num_stacked_layers
+        self.hidden_size = hidden_layer_size
+        self.num_layers = num_layers
 
-        self.lstm = nn.LSTM(input_size, hidden_size, num_stacked_layers, 
-                            batch_first=True)
+        self.lstm = nn.LSTM(num_features, hidden_layer_size, num_layers, batch_first=True)
         
-        self.fc = nn.Linear(hidden_size, 1) # last layer is 
+        # fc_1 optional? remove to prevent overfit to train data?
+        # self.fc_1 =  nn.Linear(hidden_layer_size, hidden_layer_size) # fully connected
+        self.fc = nn.Linear(hidden_layer_size, 1) # fully connected last layer
 
     def forward(self, x):
         batch_size = x.size(0)
-        h0 = torch.zeros(self.num_stacked_layers, batch_size, self.hidden_size).to(device)
-        c0 = torch.zeros(self.num_stacked_layers, batch_size, self.hidden_size).to(device)
-        
-        out, _ = self.lstm(x, (h0, c0)) # _ is updated tupple (h, c)
-        out = self.fc(out[:, -1, :]) # makes sense of the LSTM raw output, which is its state iirc
-        return out
+        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size).requires_grad_().to(device)
+        c0 = torch.zeros(self.num_layers, batch_size, self.hidden_size).requires_grad_().to(device)
+
+        # out, _ = self.lstm(x, (h0, c0)) # _ is updated tupple (h, c)
+        # out = self.fc(out[:, -1, :]) # makes sense of the LSTM raw output, which is its state iirc
+        # return out
+
+        # alternative return out code
+        _, (hn, _) = self.lstm(x, (h0, c0))
+        out = self.fc(hn[0]).flatten()  # First dim of Hn is num_layers, which is set to 1 above.
+        return out  
 
 # CUSTOM LOSS FUNCTION
 # L = SUM { ln(pred-target)**2 + 1 } * tanh(#inc/#cor)
@@ -49,7 +71,7 @@ class myLoss(nn.Module):
         n = y.size(dim=0)
         N = torch.tensor(n)
         
-        numSignCor = countSignMatch(yHat, y)
+        numSignCor = process_data.countSignMatch(yHat, y)
         numSignInc = N - numSignCor
         m = nn.Sigmoid()
         factor = m((numSignInc / numSignCor)-1.3)
@@ -58,204 +80,103 @@ class myLoss(nn.Module):
 
         assert not math.isnan(res)
         return res
-
-# TODO: 
-################################################################################
-################################################################################
-hiddenSize = 64
-lstmLayers = 2
-model = LSTM(1, hiddenSize, lstmLayers) 
+    
+model = LSTM(num_features = 1 + len(delay_features+features), 
+             hidden_layer_size = hiddenSize, 
+             num_layers = lstmLayers)
 model.to(device)
-################################################################################
-learning_rate = 0.001
-num_epochs = 200
+
 loss_function = myLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-scheduler = lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.60)
-################################################################################
-################################################################################
+scheduler = lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.70)
 
-
-def run_stock(data, lookback_days, train_test_split = 0.9):
-    data.drop(columns=['High', 'Low', 'Adj Close'], axis=1, inplace=True)
-    data['Date'] = pd.to_datetime(data['Date'])
-
-    prepped_data = normalize_dataframe(data, lookback_days)
-    calc_naive(prepped_data)
-    X_train, y_train, X_test, y_test = for_pytorch_dataframe(prepped_data, lookback_days, train_test_split)
-
-    train_dataset = TimeSeriesDataset(X_train, y_train)
-    test_dataset = TimeSeriesDataset(X_test, y_test)
+class StockDataset(Dataset):
+    def __init__(self, df, target, features, delay_features, lookback=7):
+        self.target = target
+        self.features = features # features known on present day
+        self.delay_features = delay_features # features not yet known
+        self.lookback = lookback
+        self.y = torch.tensor(df[target].values).float()
+        self.X = torch.tensor(df[delay_features + features].values).float()
+        self.length = self.X.shape[0] - self.lookback - 1 # 1 for delayed
     
-    batch_size = 32 # TODO
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, i): 
+        i_end = i+self.lookback
+        features = self.X[i+1:(i_end+1), len(self.delay_features):]
+        delay_features = self.X[i:i_end, :len(self.delay_features)]
+        prev_targets = torch.reshape(self.y[i:i_end], (self.lookback, 1))
+        x = torch.cat((prev_targets, delay_features, features), dim=1)
+        return x, self.y[i_end]
+    
+def run_stock(data):
+
+    prepped_data = process_df(data)
+    process_data.calc_naive(prepped_data)
+
+    split_index = int( len(prepped_data) * train_test_split )
+    df_train = prepped_data[:split_index]
+    df_test = prepped_data[split_index:]
+    train_dataset = StockDataset(
+        df_train,
+        target = target, features = features, delay_features = delay_features,
+        lookback = lookback )
+    test_dataset = StockDataset(
+        df_test,
+        target = target, features = features, delay_features = delay_features,
+        lookback = lookback )
+    
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) # why shuffle every epoch?
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    
-    full_test_loader = DataLoader(test_dataset, batch_size=len(X_test), shuffle=False)
+    full_train_loader = DataLoader(train_dataset, batch_size=len(df_train), shuffle=False)
+    full_test_loader = DataLoader(test_dataset, batch_size=len(df_test), shuffle=False)
 
-    for _, batch in enumerate(train_loader):
-        x_batch, y_batch = batch[0].to(device), batch[1].to(device)
+    # for _, batch in enumerate(train_loader):
+        # x_batch, y_batch = batch[0].to(device), batch[1].to(device)
         # print(x_batch.shape, y_batch.shape) # torch.Size([16, 17, 1]) torch.Size([16, 1])
-        break # this only runs once???
+        # break # this only runs once???
 
   
+    # TRAIN MODEL
     start_time = time.time()
+    epoch_stats_df_row_list = []
 
-    df_row_list = []
     for epoch in range(num_epochs):
         train_loss = train_one_epoch(train_loader)
-        test_loss, output, target = validate_one_epoch(test_loader, full_test_loader)
+        test_loss, output, pred_target = validate_one_epoch(test_loader, full_test_loader)
         scheduler.step()
         
-        sign_correct, roi = validate_output(output, target, data)
-        df_row_list.append({'epoch':epoch, 'avgTrainLoss':train_loss, 'testLoss':test_loss, 
+        # collect epoch info
+        sign_correct, roi = process_data.validate_output(output, pred_target, prepped_data) # move to process_data
+        epoch_stats_df_row_list.append({'epoch':epoch, 'avgTrainLoss':train_loss, 'testLoss':test_loss, 
                         'testSignCorrect':sign_correct, 'ROI':roi})
         
         if not epoch % 30:
-            seconds_elapsed = (time.time() - start_time)
-            seconds_per_epoch = seconds_elapsed / (epoch+1)
-            est_time_remaining = (num_epochs-(epoch+1))*seconds_per_epoch
+            log_train_speed(epoch, start_time)
 
-            print('epoch', epoch, '/', num_epochs)
-            print('time elapsed: {0:.2f}s'.format(seconds_elapsed))
-            print('ETA: {0:.2f}s'.format(est_time_remaining))
-            print()
+    return prepped_data, full_train_loader, full_test_loader, pd.DataFrame(epoch_stats_df_row_list)
 
 
-    return X_train, y_train, X_test, y_test, pd.DataFrame(df_row_list)
-
-
-def calc_naive(df):
-    n = df['open_d_close'].size
-    print("+", sum(df['open_d_close'] > 0)/n*100)
-    print("0", sum(df['open_d_close'] == 0)/n*100)
-    print("-", sum(df['open_d_close'] < 0)/n*100)
-
-    
-    c = (df['open_d_close'] * df['open_d_close'].shift(1))[1:]
-    print("Naive guess success rates:")
-    print("correct", sum(c>0)/c.size * 100)
-    print("incorrect", sum(c<=0)/c.size * 100)
-
-
-    c = (c>0).astype(int) - (c<0).astype(int)
-    print("Naive ROI:")
-    r = df['open_d_close'][1:] * c + 1
-    print(r.cumprod().iloc[-1])
-
-    print()
-    return
-
-def normalize_dataframe(df, days_back):
-    # calc (yest_close->today_open) and (today_open->today_close) %deltas
-    df['open_d_close'] = (df['Close'] - df['Open']) / df['Open']  # (close-open)/open
-    df['close_d_open'] = (df['Open'] - df['Close'].shift(1)) / df['Close'].shift(1) 
-
-    # "normalize":
-
-    # volume -> log normal
-    df['ln_vol'] = np.log(df['Volume'])
-    ln_vol_mean = np.array(df['ln_vol']).mean()
-    ln_vol_stdev = np.array(df['ln_vol']).std()
-    df['ln_vol_Z'] = (df['ln_vol']-ln_vol_mean)/ln_vol_stdev
-
-    # %delta -> Z-score 
-    open_d_close_mean = df['open_d_close'].mean() 
-    open_d_close_stdev = df['open_d_close'].std()
-    df['open_close_Z'] = (df['open_d_close']-open_d_close_mean)/open_d_close_stdev
-
-    close_d_open_mean = df['close_d_open'].mean() 
-    close_d_open_stdev = df['close_d_open'].std()
-    df['close_open_Z'] = (df['close_d_open']-close_d_open_mean)/close_d_open_stdev
-
-    # copy in prev lookback days
-    for i in range(1, days_back+1):
-        df[f'ln_vol_Z_-{i}'] = df['ln_vol_Z'].shift(i)
-        df[f'open_close_Z_-{i}'] = df['open_close_Z'].shift(i)
-        df[f'close_open_Z_-{i}'] = df['close_open_Z'].shift(i)
-    
+# attempt to normalize values for LSTM 
+def process_df(df):
+    process_data.calc_p_delta_Z(df, 'Open', 'Close')
+    process_data.calc_p_delta_Z(df, 'Close', 'Open', x1shift=1)
+    process_data.calc_log_Z(df, 'Volume')
+    df.dropna(inplace=True)
     return df
 
+def log_train_speed(epoch, start_time):
+    seconds_elapsed = (time.time() - start_time)
+    seconds_per_epoch = seconds_elapsed / (epoch+1)
+    est_time_remaining = (num_epochs-(epoch+1))*seconds_per_epoch
 
-def for_pytorch_dataframe(df, lookback_days, train_test_split):
-    df = dc(df)
-    df.drop(columns=['Date', 'Volume', 'ln_vol', 'ln_vol_Z', 'Open', 'Close', 
-                     'close_d_open', 'open_d_close', f'close_open_Z_-{lookback_days}'], 
-            axis=1, inplace=True)
-    df.dropna(inplace=True)
+    print('epoch', epoch, '/', num_epochs)
+    print('time elapsed: {0:.2f}s'.format(seconds_elapsed))
+    print('ETA: {0:.2f}s'.format(est_time_remaining))
+    print()
 
-    # df.to_csv('out.csv')
-
-    df = df.to_numpy()
-
-    # volume of present day not given. 
-    # target prediction y = open_close_Z col. 
-    # given historical data in lookback_days * {close_open_Z, ln_vol_Z, open_close_Z}
-    y = df[:, 0] # 1st col 
-    X = df[:, 1:] # all cols after 1st 
-    # print('y', y)
-    # print('X', X)
-    X = dc(np.flip(X, axis=1)) # reverses order of column, so most recent data is last, -5 -> -1 days
-
-    split_index = int(len(X) * train_test_split)
-    X_train = X[:split_index]
-    X_test = X[split_index:]
-    y_train = y[:split_index]
-    y_test = y[split_index:]
-
-    # pytorch conversion
-    # lstm requires extra dimension
-    X_train = X_train.reshape((-1, lookback_days*3, 1))
-    X_test = X_test.reshape((-1, lookback_days*3, 1))
-    y_train = y_train.reshape((-1, 1))
-    y_test = y_test.reshape((-1, 1))
-    # pytorch tensors
-    X_train = torch.tensor(X_train).float()
-    y_train = torch.tensor(y_train).float()
-    X_test = torch.tensor(X_test).float()
-    y_test = torch.tensor(y_test).float()
-
-    return X_train, y_train, X_test, y_test
-        
-def validate_output(yHat, y, df):
-    assert yHat.size() == y.size()
-    with torch.no_grad():
-
-        sign_correct_proportion = countSignMatch(yHat, y).item() / y.size(dim=0)
-        
-        prod = yHat * y
-        res = np.array((prod>0)).astype(int) - np.array((prod<0)).astype(int)
-        res = np.reshape(res, res.size)
-        deltas = df['open_d_close'].tail(len(res))
-        rois = res * deltas + 1
-        prod_roi = rois.cumprod().iloc[-1]
-
-        ############## TODO: I WANT TO KNOW HOW MANY GUESSES ARE POSITIVE
-        # i think theyre mostly positive
-        # also check if im lagging behind. especially on spikes. 
-
-    return sign_correct_proportion, prod_roi
-
-# do i need a with torch no grad wrapper and deep copy everything b4hand
-def countSignMatch(x, y):
-    assert x.size(dim=0) == y.size(dim=0)
-    xy = x*y
-    z = torch.zeros((x*y).shape)
-    return torch.count_nonzero(torch.gt(xy,z))
-
-
-
-class TimeSeriesDataset(Dataset):
-    def __init__(self, X, y):
-        self.X = X
-        self.y = y
-
-    def __len__(self):
-        return len(self.X)
-
-    def __getitem__(self, i):
-        return self.X[i], self.y[i]
-    
 
 
 # return average loss over epoch
@@ -263,26 +184,16 @@ def train_one_epoch(train_loader):
     model.train(True)
 
     loss_accumulator = 0.0
-
     for batch_index, batch in enumerate(train_loader):
         x_batch, y_batch = batch[0].to(device), batch[1].to(device)
-        
         output = model(x_batch)
         loss = loss_function(output, y_batch)
         loss_accumulator += loss.item()
-        # print('training loss batch', batch_index, '{0:.5f}'.format(loss.item()))
         
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        # if not batch_index % 10:
-            # avg_loss_across_batches = running_loss / 10
-        #     print('Batch {0}, Loss: {1:.3f}'.format(batch_index+1,
-        #                                             avg_loss_across_batches))
-            # running_loss = 0.0
-    
-    # print()
     return loss_accumulator / len(train_loader)
 
 # return (avg loss, output tensor, target tensor) for entire test period
@@ -297,7 +208,6 @@ def validate_one_epoch(test_loader, full_test_loader):
             output = model(x_batch)
             loss = loss_function(output, y_batch)
             running_loss += loss.item()
-            # print('test loss batch', batch_index, '{0:.5f}'.format(loss.item()))
 
     ret_full_output = None
     ret_target = None
@@ -309,44 +219,4 @@ def validate_one_epoch(test_loader, full_test_loader):
     avg_loss = running_loss / len(test_loader)
     return avg_loss, ret_full_output, ret_target
 
-    # print('Val Loss: {0:.3f}'.format(avg_loss_across_batches))
-    # print('***************************************************\n')
 
-
-
-
-
-
-
-
-
-
-
-
-# runs the entire thing
-# with torch.no_grad():
-#         predicted = model(X_train.to(device)).to('cpu').numpy()
-
-
-
-
-#     train_predictions = predicted.flatten()
-
-#     dummies = np.zeros((X_train.shape[0], lookback+1))
-#     dummies[:, 0] = train_predictions
-
-#     train_predictions = dc(dummies[:, 0])
-#     train_predictions
-
-#     dummies = np.zeros((X_train.shape[0], lookback+1))
-#     dummies[:, 0] = y_train.flatten()
-
-#     new_y_train = dc(dummies[:, 0])
-#     new_y_train
-
-#     plt.plot(new_y_train, label='Actual Close')
-#     plt.plot(train_predictions, label='Predicted Close')
-#     plt.xlabel('Day')
-#     plt.ylabel('Close')
-#     plt.legend()
-#     plt.show()
