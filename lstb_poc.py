@@ -24,7 +24,7 @@ target = 'Open_Close_Z'
 delay_features = ['ln_Volume_Z']
 features = ['Close_Open_Z']
 ################################################################################
-hiddenSize = 128 
+hiddenSize = 64
 lstmLayers = 1
 ################################################################################
 learning_rate = 0.0002
@@ -81,16 +81,32 @@ class myLoss(nn.Module):
         assert not math.isnan(res)
         return res
     
-model = LSTM(num_features = 1 + len(delay_features+features), 
-             hidden_layer_size = hiddenSize, 
-             num_layers = lstmLayers)
-model.to(device)
-
+model = None
+optimizer = None
 loss_function = myLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-scheduler = lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.70)
 
-class StockDataset(Dataset):
+class MultivariateDataset(Dataset):
+    def __init__(self, df, target, features, delay_features, lookback=7):
+        self.target = target
+        self.features = features # features known on present day
+        self.delay_features = delay_features # features not yet known
+        self.lookback = lookback
+        self.y = torch.tensor(df[target].values).float()
+        self.X = torch.tensor(df[delay_features + features].values).float()
+        self.length = self.X.shape[0] - self.lookback - 1 # 1 for delayed
+    
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, i): 
+        i_end = i+self.lookback
+        features = self.X[i+1:(i_end+1), len(self.delay_features):]
+        delay_features = self.X[i:i_end, :len(self.delay_features)]
+        prev_targets = torch.reshape(self.y[i:i_end], (self.lookback, 1))
+        x = torch.cat((prev_targets, delay_features, features), dim=1)
+        return x, self.y[i_end]
+
+class MonovariateDataset(Dataset):
     def __init__(self, df, target, features, delay_features, lookback=7):
         self.target = target
         self.features = features # features known on present day
@@ -112,18 +128,29 @@ class StockDataset(Dataset):
         return x, self.y[i_end]
     
 def run_stock(data):
+    global model
+    global optimizer
+    model = LSTM(num_features = 1 + len(delay_features+features), 
+             hidden_layer_size = hiddenSize, 
+             num_layers = lstmLayers)
+    # monomodel = LSTM(num_features = 1, 
+    #         hidden_layer_size = hiddenSize, 
+    #         num_layers = lstmLayers)
+    model.to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.70)
 
-    prepped_data = process_df(data)
-    process_data.calc_naive(prepped_data)
 
-    split_index = int( len(prepped_data) * train_test_split )
-    df_train = prepped_data[:split_index]
-    df_test = prepped_data[split_index:]
-    train_dataset = StockDataset(
+    
+
+    split_index = int( len(data) * train_test_split )
+    df_train = data[:split_index]
+    df_test = data[split_index:]
+    train_dataset = MultivariateDataset(
         df_train,
         target = target, features = features, delay_features = delay_features,
         lookback = lookback )
-    test_dataset = StockDataset(
+    test_dataset = MultivariateDataset(
         df_test,
         target = target, features = features, delay_features = delay_features,
         lookback = lookback )
@@ -149,21 +176,21 @@ def run_stock(data):
         scheduler.step()
         
         # collect epoch info
-        sign_correct, roi = process_data.validate_output(output, pred_target, prepped_data) # move to process_data
+        sign_correct, roi = process_data.validate_output(output, pred_target, data) # move to process_data
         epoch_stats_df_row_list.append({'epoch':epoch, 'avgTrainLoss':train_loss, 'testLoss':test_loss, 
                         'testSignCorrect':sign_correct, 'ROI':roi})
         
-        if not epoch % 30:
-            log_train_speed(epoch, start_time)
+        # if not epoch % 30:
+        #     log_train_speed(epoch, start_time)
 
-    return prepped_data, full_train_loader, full_test_loader, pd.DataFrame(epoch_stats_df_row_list)
+    return full_train_loader, full_test_loader, pd.DataFrame(epoch_stats_df_row_list)
 
 
 # attempt to normalize values for LSTM 
 def process_df(df):
-    process_data.calc_p_delta_Z(df, 'Open', 'Close')
-    process_data.calc_p_delta_Z(df, 'Close', 'Open', x1shift=1)
-    process_data.calc_log_Z(df, 'Volume')
+    df = process_data.calc_p_delta_Z(df, 'Open', 'Close')
+    df = process_data.calc_p_delta_Z(df, 'Close', 'Open', x1shift=1)
+    df = process_data.calc_log_Z(df, 'Volume')
     df.dropna(inplace=True)
     return df
 

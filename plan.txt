@@ -14,8 +14,9 @@ cleaned up input and dataframe processing + some modularisation
 ===============================================================================
 ===============================================================================
 
-NEXT: MULTIVARIATE INPUT.
-THEN GET API WORKING. I WANT MORE DATA!
+next : test methodologies 
+
+GET API WORKING. I WANT MORE DATA!
 
 
 
